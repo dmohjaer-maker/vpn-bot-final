@@ -1,17 +1,8 @@
-# 🤖 ربات فروش VPN — نسخه رنگی (کیبورد پایین صفحه)
-# فقط ۲ خط اول رو تنظیم کن، بقیه رو دست نزن!
-
-import os
-
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
-
-SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "")
-CARD_NUMBER = os.getenv("CARD_NUMBER", "")
-CARD_HOLDER = os.getenv("CARD_HOLDER", "")
+# 🤖 ربات فروش VPN — نسخه فول اپشن (قیمت ماهانه ۶۷ هزار)
+# تنظیمات حساس فقط از متغیرهای محیطی خوانده می‌شوند.
 
 # ================= بقیه کد (دست نزن) =================
-import asyncio, logging, uuid, random
+import asyncio, logging, uuid, random, os
 from datetime import datetime, timedelta, date
 import aiosqlite
 from aiogram import Bot, Dispatcher, Router, F, BaseMiddleware
@@ -24,10 +15,34 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (Message, ReplyKeyboardMarkup, ReplyKeyboardRemove,
                            KeyboardButton, InlineKeyboardButton as IB, InlineKeyboardMarkup as IKM)
 
-DB_PATH = "vpn_bot.db"
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN is required")
 
+ADMIN_IDS = []
+for raw_admin_id in os.getenv("ADMIN_IDS", "").split(","):
+    raw_admin_id = raw_admin_id.strip()
+    if raw_admin_id:
+        try:
+            ADMIN_IDS.append(int(raw_admin_id))
+        except ValueError as exc:
+            raise RuntimeError("ADMIN_IDS must be a comma-separated list of numeric Telegram IDs") from exc
+if not ADMIN_IDS:
+    raise RuntimeError("ADMIN_IDS must contain at least one Telegram ID")
+
+SUPPORT_USERNAME = os.getenv("SUPPORT_USERNAME", "").strip()
+CARD_NUMBER = os.getenv("CARD_NUMBER", "").strip()
+CARD_HOLDER = os.getenv("CARD_HOLDER", "").strip()
+
+DB_PATH = "vpn_bot.db"
 BACK = "🔙 منوی اصلی"
 BACK_ADMIN = "🔙 پنل ادمین"
+
+PRICE_PER_MONTH = 67000          # 💰 قیمت هر ماه
+MONTHS = {"۱ ماهه 📅": 1, "۲ ماهه 📅": 2, "۳ ماهه 📅": 3}
+COUNTRIES = [("🇩🇪 آلمان", "germany"), ("🇺🇸 آمریکا", "usa"),
+             ("🇳🇱 هلند", "netherlands"), ("🇫🇷 فرانسه", "france")]
+RENEW_DAYS = {"تمدید ۷ روزه 📅": 7, "تمدید ۱۵ روزه 📅": 15, "تمدید ۳۰ روزه 📅": 30}
 
 def is_admin(tg_id):
     return tg_id in ADMIN_IDS
@@ -35,7 +50,6 @@ def is_admin(tg_id):
 def fmt_price(n):
     return f"{int(n):,}"
 
-# ---------- دکمه رنگی ----------
 def btn(text, style=None):
     try:
         if style:
@@ -47,18 +61,18 @@ def btn(text, style=None):
 def rkb(rows, placeholder=None):
     return ReplyKeyboardMarkup(
         keyboard=[[btn(t[0], t[1]) if isinstance(t, tuple) else btn(t) for t in row] for row in rows],
-        resize_keyboard=True,
-        is_persistent=True,
-        input_field_placeholder=placeholder,
+        resize_keyboard=True, is_persistent=True, input_field_placeholder=placeholder,
     )
 
 def main_kb(is_admin_=False):
     rows = [
         [("خرید سرویس جدید 🛒", "primary"), ("سرویسهای من 📦", "success")],
-        [("دریافت اکانت تست رایگان 🎁", "success")],
-        [("کیف پول 👛", "success"), ("حساب کاربری 👤", "primary")],
-        [("تعرفه 💎", "primary")],
-        [("چرخ شانس 🎡", "success"), ("پشتیبانی SOS", "danger")],
+        [("تمدید سرویس 🔄", "primary"), ("اکانت تست رایگان 🎁", "success")],
+        [("کیف پول 👛", "success"), ("افزایش موجودی 💳", "primary")],
+        [("تعرفه 💎", "primary"), ("چرخ شانس 🎡", "success")],
+        [("کد تخفیف 🏷️", "success"), ("دعوت دوستان 👥", "primary")],
+        [("آموزش اتصال 📖", "primary"), ("پشتیبانی SOS 📞", "danger")],
+        [("حساب کاربری 👤", "primary"), ("درباره ربات ℹ️", "primary")],
     ]
     if is_admin_:
         rows.append([("⚙️ پنل ادمین", "primary")])
@@ -69,17 +83,14 @@ ADMIN_KB = rkb([
     [("📋 سفارشات", "primary"), ("💳 تراکنشها", "success")],
     [("🏷️ مدیریت کد تخفیف", "success"), ("📣 ارسال همگانی", "primary")],
     [("👥 کاربران", "primary"), ("⚙️ تنظیمات", "success")],
-    [(BACK, "danger")],
+    [("💾 پشتیبانگیری", "primary"), (BACK, "danger")],
 ])
 
-def plan_btn(p):
-    return f"📦 {p['name']} — {int(p['price']):,} ت"
-
-def aplan_btn(p):
-    return f"🛠 {p['name']} {'✅' if p['is_active'] else '⛔️'}"
-
 def svc_btn(s):
-    return f"🔑 {s['plan_name'] or 'سرویس'} — تا {s['expire_date'][:10]}"
+    return f"🔑 {s['name'] or s['plan_name'] or 'سرویس'} — تا {s['expire_date'][:10]}"
+
+def renew_btn(s):
+    return f"🔄 {s['name'] or s['plan_name'] or 'سرویس'} — تا {s['expire_date'][:10]}"
 
 # ---------------- دیتابیس ----------------
 async def init_db():
@@ -109,13 +120,17 @@ async def init_db():
             price REAL NOT NULL, discount INTEGER NOT NULL DEFAULT 0,
             payment_method TEXT DEFAULT 'card', receipt TEXT,
             status TEXT DEFAULT 'pending',
+            type TEXT DEFAULT 'purchase',
+            renew_service_id INTEGER,
+            days INTEGER,
+            location TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
             paid_at TEXT
         );
         CREATE TABLE IF NOT EXISTS services (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL, plan_id INTEGER,
-            config TEXT, expire_date TEXT,
+            name TEXT, config TEXT, expire_date TEXT,
             traffic_used REAL NOT NULL DEFAULT 0,
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
@@ -136,10 +151,16 @@ async def init_db():
         );
         CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
         """)
-        try:
-            await db.execute("ALTER TABLE users ADD COLUMN trial_used INTEGER NOT NULL DEFAULT 0")
-        except Exception:
-            pass
+        for alt in ("ALTER TABLE users ADD COLUMN trial_used INTEGER NOT NULL DEFAULT 0",
+                    "ALTER TABLE orders ADD COLUMN type TEXT DEFAULT 'purchase'",
+                    "ALTER TABLE orders ADD COLUMN renew_service_id INTEGER",
+                    "ALTER TABLE orders ADD COLUMN days INTEGER",
+                    "ALTER TABLE orders ADD COLUMN location TEXT",
+                    "ALTER TABLE services ADD COLUMN name TEXT"):
+            try:
+                await db.execute(alt)
+            except Exception:
+                pass
         await db.commit()
 
 async def q(sql, params=()):
@@ -221,9 +242,10 @@ async def toggle_plan(pid):
 async def delete_plan(pid):
     await exec("DELETE FROM plans WHERE id=?", (pid,))
 
-async def create_order(user_id, plan_id, price, discount, method, receipt):
-    return await exec("INSERT INTO orders (user_id, plan_id, price, discount, payment_method, receipt) VALUES (?,?,?,?,?,?)",
-                      (user_id, plan_id, price, discount, method, receipt))
+async def create_order(user_id, plan_id, price, discount, method, receipt, type_="purchase",
+                       renew_service_id=None, days=None, location=None):
+    return await exec("INSERT INTO orders (user_id, plan_id, price, discount, payment_method, receipt, type, renew_service_id, days, location) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                      (user_id, plan_id, price, discount, method, receipt, type_, renew_service_id, days, location))
 
 async def get_order(oid):
     return await q1("SELECT o.*, u.full_name, p.name as plan_name FROM orders o LEFT JOIN users u ON o.user_id=u.telegram_id LEFT JOIN plans p ON o.plan_id=p.id WHERE o.id=?", (oid,))
@@ -240,15 +262,27 @@ async def reject_order(oid):
 async def order_stats():
     return await q1("SELECT COUNT(*) as cnt, COALESCE(SUM(price),0) as rev FROM orders WHERE status='approved'")
 
-async def create_service(user_id, plan_id, config, expire_date):
-    return await exec("INSERT INTO services (user_id, plan_id, config, expire_date) VALUES (?,?,?,?)",
-                      (user_id, plan_id, config, expire_date))
+async def create_service(user_id, plan_id, config, expire_date, name=None):
+    return await exec("INSERT INTO services (user_id, plan_id, config, expire_date, name) VALUES (?,?,?,?,?)",
+                      (user_id, plan_id, config, expire_date, name))
 
 async def get_user_services(tg_id):
     return await q("SELECT s.*, p.name as plan_name FROM services s LEFT JOIN plans p ON s.plan_id=p.id WHERE s.user_id=? AND s.is_active=1 ORDER BY s.id DESC", (tg_id,))
 
 async def get_service(sid):
     return await q1("SELECT s.*, p.name as plan_name FROM services s LEFT JOIN plans p ON s.plan_id=p.id WHERE s.id=?", (sid,))
+
+async def extend_service(sid, days):
+    svc = await get_service(sid)
+    if not svc:
+        return None
+    try:
+        base = datetime.strptime(svc["expire_date"], "%Y-%m-%d %H:%M")
+    except Exception:
+        base = datetime.now()
+    new_exp = (base + timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
+    await exec("UPDATE services SET expire_date=? WHERE id=?", (new_exp, sid))
+    return new_exp
 
 async def count_active_services():
     return (await q1("SELECT COUNT(*) as c FROM services WHERE is_active=1 AND expire_date > datetime('now','localtime')"))["c"]
@@ -289,15 +323,18 @@ async def get_setting(key):
     return r["value"] if r else None
 
 # ---------------- تحویل سرویس ----------------
-async def make_config(user_id, plan):
+async def make_config(user_id, plan, location=None):
     # 🔌 اینجا بعداً به پنل مرزبان وصل میشه
-    return f"vless://{uuid.uuid4().hex}@{plan['name'].replace(' ', '')}.example.com:443?security=tls&type=ws#VPN-{user_id}"
+    host = (location or plan["name"]).replace(" ", "").lower()
+    return f"vless://{uuid.uuid4().hex}@{host}.example.com:443?security=tls&type=ws#VPN-{user_id}"
 
-async def finalize_order(user_id, order_id, plan, price, method):
+async def finalize_order(user_id, order_id, plan, price, method, days=None, location=None):
     await approve_order(order_id)
-    config = await make_config(user_id, plan)
-    expire = (datetime.now() + timedelta(days=plan["days"])).strftime("%Y-%m-%d %H:%M")
-    svc_id = await create_service(user_id, plan["id"], config, expire)
+    config = await make_config(user_id, plan, location)
+    dur = days or plan["days"]
+    expire = (datetime.now() + timedelta(days=dur)).strftime("%Y-%m-%d %H:%M")
+    name = f"{location} | {dur} روزه" if location else plan["name"]
+    svc_id = await create_service(user_id, plan["id"], config, expire, name)
     if method == "wallet":
         await deduct_balance(user_id, price)
         await create_wallet_tx(user_id, -price, "spend", "approved")
@@ -319,9 +356,10 @@ router = Router()
 
 class UserStates(StatesGroup):
     wait_receipt = State()
-    wait_discount = State()
+    wait_discount_code = State()
     wait_charge_amount = State()
     wait_charge_receipt = State()
+    wait_renew_receipt = State()
     wait_support = State()
 
 class AdminStates(StatesGroup):
@@ -368,53 +406,65 @@ async def back_admin(message: Message, state: FSMContext):
         return
     await message.answer("⚙️ پنل مدیریت 👇", reply_markup=ADMIN_KB)
 
-# ---------- خرید ----------
+# ---------- خرید (۱/۲/۳ ماه → ۴ لوکیشن) ----------
+PAY_KB = rkb([
+    [("💳 پرداخت کارت به کارت", "primary")],
+    [("👛 پرداخت با کیف پول", "success")],
+    [("🏷️ کد تخفیف", "success"), (BACK, "danger")],
+])
+
 @router.message(F.text == "خرید سرویس جدید 🛒")
 async def buy_menu(message: Message, state: FSMContext):
     await state.clear()
-    plans = await get_active_plans()
-    if not plans:
-        await message.answer("فعلاً سرویسی موجود نیست 😔", reply_markup=main_kb(is_admin(message.from_user.id)))
-        return
-    rows = [[(plan_btn(p), "success")] for p in plans]
+    await message.answer("🛒 <b>چند ماهه میخوای؟</b> 👇\n📊 حجم: ♾️ نامحدود در همه پلنها",
+                         reply_markup=rkb([
+                             [("۱ ماهه 📅", "success"), ("۲ ماهه 📅", "success")],
+                             [("۳ ماهه 📅", "primary")],
+                             [(BACK, "danger")],
+                         ]))
+
+@router.message(F.text.in_(MONTHS.keys()))
+async def buy_months(message: Message, state: FSMContext):
+    months = MONTHS[message.text]
+    price = PRICE_PER_MONTH * months
+    await state.update_data(months=months)
+    rows = [[(f"{flag} {name}", "primary")] for flag, name in COUNTRIES]
     rows.append([(BACK, "danger")])
-    await message.answer("🛒 <b>سرویسهای موجود:</b>\nروی پلن مورد نظرت بزن 👇", reply_markup=rkb(rows))
+    await message.answer(f"📅 مدت: <b>{months} ماهه</b> | 💰 قیمت: <b>{fmt_price(price)} تومان</b>\n"
+                         f"📊 حجم: ♾️ نامحدود\n━━━━━━━━━━━━━━━\n🌍 <b>لوکیشن مورد نظرت رو انتخاب کن:</b>",
+                         reply_markup=rkb(rows))
 
-@router.message(F.text == "تعرفه 💎")
-async def tariff_menu(message: Message, state: FSMContext):
-    await buy_menu(message, state)
+@router.message(F.text.in_({f"{flag} {name}" for flag, name in COUNTRIES}))
+async def buy_country(message: Message, state: FSMContext):
+    data = await state.get_data()
+    months = data.get("months")
+    if not months:
+        await message.answer("اول تعداد ماه رو انتخاب کن 👇", reply_markup=main_kb(is_admin(message.from_user.id)))
+        return
+    loc_label = message.text
+    loc_slug = dict((f"{f} {n}", s) for f, n, s in [(f, n, s) for f, n in COUNTRIES for s in [n]])[loc_label]
+    price = PRICE_PER_MONTH * months
+    discount = data.get("discount", 0)
+    final_price = int(price * (100 - discount) / 100)
+    await state.update_data(location=loc_label, loc_slug=loc_slug)
+    await message.answer(f"🌍 <b>لوکیشن: {loc_label}</b>\n📅 مدت: <b>{months} ماهه</b>\n"
+                         f"📊 حجم: <b>♾️ نامحدود</b>\n"
+                         f"{'🏷️ تخفیف: ' + str(discount) + '٪' if discount else ''}\n"
+                         f"💰 قیمت: <b>{fmt_price(final_price)} تومان</b>\n━━━━━━━━━━━━━━━\nروش پرداخت رو انتخاب کن 👇",
+                         reply_markup=PAY_KB)
 
-@router.message(F.text.startswith("📦 "))
-async def plan_selected(message: Message, state: FSMContext):
-    plans = await get_active_plans()
-    for p in plans:
-        if message.text == plan_btn(p):
-            await state.clear()
-            await state.update_data(plan_id=p["id"])
-            await message.answer(
-                f"📦 <b>{p['name']}</b>\n━━━━━━━━━━━━━━━\n"
-                f"📄 {p['description']}\n⏳ مدت: <b>{p['days']} روز</b>\n"
-                f"📊 حجم: <b>{int(p['traffic_gb'])} گیگابایت</b>\n"
-                f"💰 قیمت: <b>{fmt_price(p['price'])} تومان</b>\n━━━━━━━━━━━━━━━\nروش پرداخت رو انتخاب کن 👇",
-                reply_markup=rkb([
-                    [("💳 پرداخت کارت به کارت", "primary")],
-                    [("👛 پرداخت با کیف پول", "success")],
-                    [("🏷️ کد تخفیف", "success"), (BACK, "danger")],
-                ]))
-            return
-
+# ---------- پرداخت ----------
 @router.message(F.text == "💳 پرداخت کارت به کارت")
 async def pay_card(message: Message, state: FSMContext):
     data = await state.get_data()
-    pid = data.get("plan_id")
-    plan = await get_plan(pid)
-    if not plan:
-        await message.answer("اول یک پلن انتخاب کن 👇", reply_markup=main_kb(is_admin(message.from_user.id)))
+    months = data.get("months")
+    if not months:
+        await message.answer("اول یک سرویس انتخاب کن 👇", reply_markup=main_kb(is_admin(message.from_user.id)))
         return
     discount = data.get("discount", 0)
-    price = int(plan["price"] * (100 - discount) / 100)
+    price = int(PRICE_PER_MONTH * months * (100 - discount) / 100)
     await state.set_state(UserStates.wait_receipt)
-    await state.update_data(plan_id=pid, discount=discount)
+    await state.update_data(months=months, discount=discount)
     await message.answer(
         f"💳 <b>پرداخت کارت به کارت</b>\n💰 مبلغ: <b>{fmt_price(price)} تومان</b>\n"
         f"{'🏷️ تخفیف: ' + str(discount) + '٪' if discount else ''}\n━━━━━━━━━━━━━━━\n"
@@ -429,20 +479,18 @@ async def receive_receipt(message: Message, state: FSMContext):
         await message.answer("لغو شد ❌", reply_markup=main_kb(is_admin(message.from_user.id)))
         return
     data = await state.get_data()
-    pid = data.get("plan_id")
-    plan = await get_plan(pid)
-    if not plan:
-        await state.clear()
-        return
+    months = data.get("months")
     discount = data.get("discount", 0)
-    price = int(plan["price"] * (100 - discount) / 100)
+    price = int(PRICE_PER_MONTH * months * (100 - discount) / 100)
+    location = data.get("location", "")
     receipt = message.text or message.caption or "📎 فایل"
-    oid = await create_order(message.from_user.id, pid, price, discount, "card", receipt)
+    oid = await create_order(message.from_user.id, None, price, discount, "card", receipt,
+                             days=months * 30, location=location)
     for admin in ADMIN_IDS:
         try:
             await message.bot.send_message(admin,
-                f"🆕 <b>سفارش جدید #{oid}</b>\n👤 کاربر: {message.from_user.full_name} (id: <code>{message.from_user.id}</code>)\n"
-                f"📦 پلن: {plan['name']}\n💰 مبلغ: {fmt_price(price)} تومان\n🧾 رسید: {receipt}")
+                f"🆕 <b>سفارش خرید #{oid}</b>\n👤 کاربر: {message.from_user.full_name} (id: <code>{message.from_user.id}</code>)\n"
+                f"🌍 لوکیشن: {location}\n📅 مدت: {months} ماهه\n💰 مبلغ: {fmt_price(price)} تومان\n🧾 رسید: {receipt}")
         except Exception:
             pass
     await message.answer("✅ سفارشت ثبت شد!\nبعد از تایید ادمین، سرویست فعال و کانفیگ برات ارسال میشه 📩",
@@ -452,33 +500,34 @@ async def receive_receipt(message: Message, state: FSMContext):
 @router.message(F.text == "👛 پرداخت با کیف پول")
 async def pay_wallet(message: Message, state: FSMContext):
     data = await state.get_data()
-    pid = data.get("plan_id")
-    plan = await get_plan(pid)
-    if not plan:
-        await message.answer("اول یک پلن انتخاب کن 👇", reply_markup=main_kb(is_admin(message.from_user.id)))
+    months = data.get("months")
+    if not months:
+        await message.answer("اول یک سرویس انتخاب کن 👇", reply_markup=main_kb(is_admin(message.from_user.id)))
         return
     discount = data.get("discount", 0)
-    price = int(plan["price"] * (100 - discount) / 100)
+    price = int(PRICE_PER_MONTH * months * (100 - discount) / 100)
     user = await get_user(message.from_user.id)
     if user["balance"] < price:
-        await message.answer("❌ موجودی کیف پول کافی نیست! اول شارژ کن", reply_markup=main_kb(is_admin(message.from_user.id)))
+        await message.answer("❌ موجودی کیف پول کافی نیست! از «افزایش موجودی 💳» شارژ کن",
+                             reply_markup=main_kb(is_admin(message.from_user.id)))
         return
-    oid = await create_order(message.from_user.id, pid, price, discount, "wallet", "—")
-    svc_id = await finalize_order(message.from_user.id, oid, plan, price, "wallet")
+    location = data.get("location", "")
+    days = months * 30
+    plan = {"id": 0, "name": f"{location} | {months} ماهه", "days": days, "traffic_gb": 0, "price": price}
+    oid = await create_order(message.from_user.id, None, price, discount, "wallet", "—",
+                             days=days, location=location)
+    svc_id = await finalize_order(message.from_user.id, oid, plan, price, "wallet", days=days, location=location)
     svc = await get_service(svc_id)
-    await message.answer(f"✅ پرداخت با موفقیت انجام شد! 🎉\n🎉 سرویس <b>{plan['name']}</b> فعال شد!\n📅 انقضا: {svc['expire_date']}\n\n🔑 <b>کانفیگ شما:</b>\n<code>{svc['config']}</code>",
+    await message.answer(f"✅ پرداخت با موفقیت انجام شد! 🎉\n🎉 سرویس <b>{svc['name']}</b> فعال شد!\n📅 انقضا: {svc['expire_date']}\n\n🔑 <b>کانفیگ شما:</b>\n<code>{svc['config']}</code>",
                          reply_markup=main_kb(is_admin(message.from_user.id)))
 
+# ---------- کد تخفیف ----------
 @router.message(F.text == "🏷️ کد تخفیف")
 async def discount_start(message: Message, state: FSMContext):
-    data = await state.get_data()
-    if not data.get("plan_id"):
-        await message.answer("اول یک پلن انتخاب کن 👇", reply_markup=main_kb(is_admin(message.from_user.id)))
-        return
-    await state.set_state(UserStates.wait_discount)
+    await state.set_state(UserStates.wait_discount_code)
     await message.answer("🏷️ کد تخفیف رو وارد کن:", reply_markup=rkb([[(BACK, "danger")]]))
 
-@router.message(UserStates.wait_discount)
+@router.message(UserStates.wait_discount_code)
 async def discount_apply(message: Message, state: FSMContext):
     if message.text == BACK:
         await state.clear()
@@ -486,27 +535,19 @@ async def discount_apply(message: Message, state: FSMContext):
         return
     code = (message.text or "").strip().upper()
     dc = await get_discount(code)
-    data = await state.get_data()
-    pid = data.get("plan_id")
-    plan = await get_plan(pid)
-    if not plan:
-        await state.clear()
-        return
     if not dc or not dc["is_active"] or dc["used_count"] >= dc["max_uses"]:
-        await message.answer("❌ کد تخفیف نامعتبر یا مصرفشده!", reply_markup=rkb([
-            [("💳 پرداخت کارت به کارت", "primary")],
-            [("👛 پرداخت با کیف پول", "success")],
-            [(BACK, "danger")],
-        ]))
+        await message.answer("❌ کد تخفیف نامعتبر یا مصرفشده!", reply_markup=rkb([[(BACK, "danger")]]))
         return
     await increment_code(dc["id"])
     await state.update_data(discount=dc["percent"])
-    await message.answer(f"✅ کد <b>{code}</b> با {dc['percent']}٪ تخفیف اعمال شد!\n💰 قیمت جدید: <b>{fmt_price(int(plan['price'] * (100 - dc['percent']) / 100))} تومان</b>",
-                         reply_markup=rkb([
-                             [("💳 پرداخت کارت به کارت", "primary")],
-                             [("👛 پرداخت با کیف پول", "success")],
-                             [(BACK, "danger")],
-                         ]))
+    data = await state.get_data()
+    if data.get("months"):
+        new_price = int(PRICE_PER_MONTH * data["months"] * (100 - dc["percent"]) / 100)
+        await message.answer(f"✅ کد <b>{code}</b> با {dc['percent']}٪ تخفیف اعمال شد!\n💰 قیمت جدید: <b>{fmt_price(new_price)} تومان</b>",
+                             reply_markup=PAY_KB)
+    else:
+        await message.answer(f"✅ کد <b>{code}</b> با {dc['percent']}٪ تخفیف اعمال شد!\nحالا برو سراغ «خرید سرویس جدید 🛒» 🚀",
+                             reply_markup=main_kb(is_admin(message.from_user.id)))
 
 # ---------- سرویسها ----------
 @router.message(F.text == "سرویسهای من 📦")
@@ -517,7 +558,7 @@ async def my_services(message: Message, state: FSMContext):
         await message.answer("هنوز سرویسی نداری 😔\nاز بخش «خرید سرویس جدید 🛒» یه سرویس بگیر!", reply_markup=main_kb(is_admin(message.from_user.id)))
         return
     rows = [[(svc_btn(s), "success")] for s in svcs]
-    rows.append([(BACK, "danger")])
+    rows.append([("تمدید سرویس 🔄", "primary"), (BACK, "danger")])
     await message.answer("📦 <b>سرویسهای فعال تو:</b>\nبرای دیدن کانفیگ، روش بزن 👇", reply_markup=rkb(rows))
 
 @router.message(F.text.startswith("🔑 "))
@@ -525,8 +566,120 @@ async def service_selected(message: Message):
     svcs = await get_user_services(message.from_user.id)
     for s in svcs:
         if message.text == svc_btn(s):
-            await message.answer(f"🔑 <b>کانفیگ {s['plan_name'] or ''}</b>\n📅 انقضا: {s['expire_date']}\n\n<code>{s['config']}</code>")
+            await message.answer(f"🔑 <b>کانفیگ {s['name'] or s['plan_name'] or ''}</b>\n📅 انقضا: {s['expire_date']}\n\n<code>{s['config']}</code>")
             return
+
+# ---------- تمدید سرویس ----------
+@router.message(F.text == "تمدید سرویس 🔄")
+async def renew_menu(message: Message, state: FSMContext):
+    await state.clear()
+    svcs = await get_user_services(message.from_user.id)
+    if not svcs:
+        await message.answer("اول باید سرویس داشته باشی! از «خرید سرویس جدید 🛒» شروع کن 😊",
+                             reply_markup=main_kb(is_admin(message.from_user.id)))
+        return
+    rows = [[(renew_btn(s), "primary")] for s in svcs]
+    rows.append([(BACK, "danger")])
+    await message.answer("🔄 <b>تمدید سرویس</b>\nروی سرویسی که میخوای تمدید کنی بزن 👇", reply_markup=rkb(rows))
+
+@router.message(F.text.startswith("🔄 "))
+async def renew_service_selected(message: Message, state: FSMContext):
+    svcs = await get_user_services(message.from_user.id)
+    for s in svcs:
+        if message.text == renew_btn(s):
+            await state.update_data(renew_svc_id=s["id"])
+            await message.answer(f"🔄 تمدید <b>{s['name'] or s['plan_name'] or 'سرویس'}</b> (انقضا: {s['expire_date']})\nمدت تمدید رو انتخاب کن 👇",
+                                 reply_markup=rkb([
+                                     [("تمدید ۷ روزه 📅", "success")],
+                                     [("تمدید ۱۵ روزه 📅", "success")],
+                                     [("تمدید ۳۰ روزه 📅", "primary")],
+                                     [(BACK, "danger")],
+                                 ]))
+            return
+
+@router.message(F.text.in_(RENEW_DAYS.keys()))
+async def renew_duration(message: Message, state: FSMContext):
+    days = RENEW_DAYS[message.text]
+    data = await state.get_data()
+    if not data.get("renew_svc_id"):
+        await message.answer("اول یک سرویس برای تمدید انتخاب کن", reply_markup=main_kb(is_admin(message.from_user.id)))
+        return
+    price = int(PRICE_PER_MONTH * days / 30)
+    await state.update_data(renew_days=days, renew_price=price)
+    await message.answer(f"🔄 تمدید <b>{days} روزه</b> سرویس\n💰 مبلغ: <b>{fmt_price(price)} تومان</b>\nروش پرداخت رو انتخاب کن 👇",
+                         reply_markup=rkb([
+                             [("💳 تمدید با کارت", "primary")],
+                             [("👛 تمدید با کیف پول", "success")],
+                             [(BACK, "danger")],
+                         ]))
+
+@router.message(F.text == "💳 تمدید با کارت")
+async def renew_card(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if not data.get("renew_svc_id"):
+        await message.answer("اول یک سرویس برای تمدید انتخاب کن", reply_markup=main_kb(is_admin(message.from_user.id)))
+        return
+    await state.set_state(UserStates.wait_renew_receipt)
+    await message.answer(
+        f"💳 <b>پرداخت تمدید</b>\n💰 مبلغ: <b>{fmt_price(data['renew_price'])} تومان</b>\n━━━━━━━━━━━━━━━\n"
+        f"🟡 شماره کارت: <code>{CARD_NUMBER}</code>\n👤 به نام: <b>{CARD_HOLDER}</b>\n━━━━━━━━━━━━━━━\n"
+        f"📸 بعد از واریز، عکس فیش یا کد پیگیری رو بفرست 👇",
+        reply_markup=rkb([[(BACK, "danger")]]))
+
+@router.message(UserStates.wait_renew_receipt)
+async def renew_receipt(message: Message, state: FSMContext):
+    if message.text == BACK:
+        await state.clear()
+        await message.answer("لغو شد ❌", reply_markup=main_kb(is_admin(message.from_user.id)))
+        return
+    data = await state.get_data()
+    receipt = message.text or message.caption or "📎 فایل"
+    oid = await create_order(message.from_user.id, None, data["renew_price"], 0, "card", receipt,
+                             type_="renew", renew_service_id=data.get("renew_svc_id"), days=data["renew_days"])
+    for admin in ADMIN_IDS:
+        try:
+            await message.bot.send_message(admin,
+                f"🔄 <b>درخواست تمدید #{oid}</b>\n👤 کاربر: {message.from_user.full_name} (id: <code>{message.from_user.id}</code>)\n"
+                f"⏳ تمدید: {data['renew_days']} روزه\n💰 مبلغ: {fmt_price(data['renew_price'])} تومان\n🧾 رسید: {receipt}")
+        except Exception:
+            pass
+    await message.answer("✅ درخواست تمدید ثبت شد!\nبعد از تایید ادمین، سرویست تمدید میشه 📩",
+                         reply_markup=main_kb(is_admin(message.from_user.id)))
+    await state.clear()
+
+@router.message(F.text == "👛 تمدید با کیف پول")
+async def renew_wallet(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if not data.get("renew_svc_id"):
+        await message.answer("اول یک سرویس برای تمدید انتخاب کن", reply_markup=main_kb(is_admin(message.from_user.id)))
+        return
+    user = await get_user(message.from_user.id)
+    if user["balance"] < data["renew_price"]:
+        await message.answer("❌ موجودی کیف پول کافی نیست! از «افزایش موجودی 💳» شارژ کن",
+                             reply_markup=main_kb(is_admin(message.from_user.id)))
+        return
+    oid = await create_order(message.from_user.id, None, data["renew_price"], 0, "wallet", "—",
+                             type_="renew", renew_service_id=data.get("renew_svc_id"), days=data["renew_days"])
+    await approve_order(oid)
+    new_exp = await extend_service(data["renew_svc_id"], data["renew_days"])
+    await deduct_balance(message.from_user.id, data["renew_price"])
+    await create_wallet_tx(message.from_user.id, -data["renew_price"], "spend", "approved")
+    await message.answer(f"✅ سرویست تمدید شد! 🎉\n📅 انقضای جدید: <b>{new_exp}</b>",
+                         reply_markup=main_kb(is_admin(message.from_user.id)))
+    await state.clear()
+
+# ---------- تعرفه ----------
+@router.message(F.text == "تعرفه 💎")
+async def tariff_menu(message: Message, state: FSMContext):
+    await state.clear()
+    text = ("💎 <b>تعرفه سرویسها</b>\n━━━━━━━━━━━━━━━\n"
+            f"📅 ۱ ماهه — <b>{fmt_price(PRICE_PER_MONTH)} تومان</b>\n"
+            f"📅 ۲ ماهه — <b>{fmt_price(PRICE_PER_MONTH * 2)} تومان</b>\n"
+            f"📅 ۳ ماهه — <b>{fmt_price(PRICE_PER_MONTH * 3)} تومان</b>\n"
+            f"━━━━━━━━━━━━━━━\n📊 حجم: ♾️ <b>نامحدود</b> در همه پلنها\n"
+            f"🌍 لوکیشنها: 🇩🇪 آلمان | 🇺🇸 آمریکا | 🇳🇱 هلند | 🇫🇷 فرانسه\n"
+            f"⚡ پشتیبانی ۲۴/۷ | 🚀 سرعت بالا\n\nبرای خرید از «خرید سرویس جدید 🛒» استفاده کن 👇")
+    await message.answer(text, reply_markup=main_kb(is_admin(message.from_user.id)))
 
 # ---------- کیف پول ----------
 @router.message(F.text == "کیف پول 👛")
@@ -535,11 +688,11 @@ async def wallet_menu(message: Message, state: FSMContext):
     user = await get_user(message.from_user.id)
     await message.answer(f"👛 <b>کیف پول</b>\n💰 موجودی: <b>{fmt_price(user['balance'])} تومان</b>\n\nبا شارژ کیف پول، خرید سریعتر انجام میدی 🚀",
                          reply_markup=rkb([
-                             [("💳 شارژ کیف پول", "success")],
+                             [("افزایش موجودی 💳", "success")],
                              [(BACK, "danger")],
                          ]))
 
-@router.message(F.text == "💳 شارژ کیف پول")
+@router.message(F.text == "افزایش موجودی 💳")
 async def charge_start(message: Message, state: FSMContext):
     await state.set_state(UserStates.wait_charge_amount)
     await message.answer("💰 مبلغ شارژ رو به <b>تومان</b> بنویس:", reply_markup=rkb([[(BACK, "danger")]]))
@@ -585,7 +738,7 @@ async def charge_receipt(message: Message, state: FSMContext):
     await state.clear()
 
 # ---------- تست رایگان ----------
-@router.message(F.text == "دریافت اکانت تست رایگان 🎁")
+@router.message(F.text == "اکانت تست رایگان 🎁")
 async def free_trial(message: Message):
     user = await get_user(message.from_user.id)
     if user["trial_used"]:
@@ -596,7 +749,7 @@ async def free_trial(message: Message):
     plan = {"name": "Test", "days": 3}
     config = await make_config(message.from_user.id, plan)
     expire = (datetime.now() + timedelta(days=3)).strftime("%Y-%m-%d %H:%M")
-    await create_service(message.from_user.id, 0, config, expire)
+    await create_service(message.from_user.id, 0, config, expire, "تست رایگان ۳ روزه 🎁")
     await message.answer(f"🎁 <b>اکانت تست رایگان (۳ روزه)</b> فعال شد! 🎉\n📅 انقضا: {expire}\n\n🔑 <b>کانفیگت:</b>\n<code>{config}</code>",
                          reply_markup=main_kb(is_admin(message.from_user.id)))
 
@@ -621,18 +774,57 @@ async def spin_wheel(message: Message):
         await message.answer("😅 افسوس... این بار چیزی نبردی!\nفردا دوباره تلاش کن 🎯",
                              reply_markup=main_kb(is_admin(message.from_user.id)))
 
-# ---------- پروفایل و پشتیبانی ----------
+# ---------- دعوت دوستان ----------
+@router.message(F.text == "دعوت دوستان 👥")
+async def referral_menu(message: Message, state: FSMContext):
+    await state.clear()
+    user = await get_user(message.from_user.id)
+    bot_me = await message.bot.get_me()
+    link = f"https://t.me/{bot_me.username}?start=ref{user['referral_code']}"
+    await message.answer(f"🎁 <b>دعوت دوستان</b>\n\nلینک اختصاصی تو 👇\n<code>{link}</code>\n\n"
+                         f"به ازای <b>اولین خرید</b> هر کسی که با لینک تو اومد، <b>۱۰٪ مبلغ خرید</b> به کیف پولت اضافه میشه 💰\n"
+                         f"هرچی بیشتر دعوت کنی، بیشتر پول درمیاری! 🚀",
+                         reply_markup=main_kb(is_admin(message.from_user.id)))
+
+# ---------- آموزش اتصال ----------
+@router.message(F.text == "آموزش اتصال 📖")
+async def guide(message: Message, state: FSMContext):
+    await state.clear()
+    text = ("📖 <b>آموزش اتصال</b>\n\n"
+            "1️⃣ اپ <b>v2rayNG</b> (اندروید) یا <b>Streisand</b> رو نصب کن.\n"
+            "2️⃣ وارد بخش کانفیگ شو و گزینه «افزودن از کلیپبورد» رو بزن.\n"
+            "3️⃣ لینک کانفیگت رو از «سرویسهای من 📦» کپی کن.\n"
+            "4️⃣ ذخیره کن و وصل شو! 🚀\n\n"
+            "📱 آیفون: اپ <b>Streisand</b> یا <b>V2Box</b> از اپاستور.\n"
+            "💻 ویندوز: اپ <b>v2rayN</b>.")
+    await message.answer(text, reply_markup=main_kb(is_admin(message.from_user.id)))
+
+# ---------- پروفایل / درباره / پشتیبانی ----------
 @router.message(F.text == "حساب کاربری 👤")
 async def profile(message: Message, state: FSMContext):
     await state.clear()
     user = await get_user(message.from_user.id)
+    svc_count = len(await get_user_services(message.from_user.id))
     await message.answer(f"👤 <b>پروفایل</b>\n━━━━━━━━━━━━━━━\n"
                          f"🆔 آیدی: <code>{user['telegram_id']}</code>\n📛 نام: {user['full_name'] or '—'}\n"
                          f"📅 تاریخ عضویت: {user['created_at'][:10]}\n💰 موجودی: {fmt_price(user['balance'])} تومان\n"
-                         f"🎁 کد معرف: <code>{user['referral_code']}</code>",
+                         f"📦 سرویسهای فعال: {svc_count}\n🎁 کد معرف: <code>{user['referral_code']}</code>",
                          reply_markup=main_kb(is_admin(message.from_user.id)))
 
-@router.message(F.text == "پشتیبانی SOS")
+@router.message(F.text == "درباره ربات ℹ️")
+async def about(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("ℹ️ <b>درباره ربات</b>\n\n"
+                         "🚀 ربات فروش VPN | نسخه ۳.۰ (فول اپشن)\n"
+                         "✅ خرید و تمدید خودکار سرویس\n"
+                         "✅ حجم نامحدود ♾️ در ۴ لوکیشن برتر دنیا\n"
+                         "✅ کیف پول و شارژ آنلاین\n"
+                         "✅ کد تخفیف و سیستم معرف\n"
+                         "✅ تست رایگان و چرخ شانس\n"
+                         "📞 پشتیبانی ۲۴/۷",
+                         reply_markup=main_kb(is_admin(message.from_user.id)))
+
+@router.message(F.text == "پشتیبانی SOS 📞")
 async def support_start(message: Message, state: FSMContext):
     if SUPPORT_USERNAME:
         await message.answer(f"📞 برای پشتیبانی به <b>@{SUPPORT_USERNAME}</b> پیام بده 😊",
@@ -677,14 +869,14 @@ async def admin_stats(message: Message):
                          f"💰 مجموع فروش: <b>{int(ostats['rev']):,} تومان</b>\n📦 سرویسهای فعال: <b>{svcs}</b>",
                          reply_markup=ADMIN_KB)
 
-# ---------- مدیریت پلنها ----------
+# ---------- مدیریت پلنها (برای استفادههای بعدی) ----------
 @router.message(F.text == "📦 مدیریت پلنها")
 async def admin_plans(message: Message, state: FSMContext):
     await state.clear()
     if not is_admin(message.from_user.id):
         return
     plans = await get_all_plans()
-    rows = [[(aplan_btn(p), "primary")] for p in plans]
+    rows = [[(f"🛠 {p['name']} {'✅' if p['is_active'] else '⛔️'}", "primary")] for p in plans]
     rows.append([("➕ افزودن پلن", "success")])
     rows.append([(BACK_ADMIN, "danger")])
     await message.answer("📦 <b>پلنها:</b> (✅ فعال | ⛔️ غیرفعال)\nروی هر پلن بزن:", reply_markup=rkb(rows))
@@ -693,7 +885,7 @@ async def admin_plans(message: Message, state: FSMContext):
 async def admin_plan_selected(message: Message, state: FSMContext):
     plans = await get_all_plans()
     for p in plans:
-        if message.text == aplan_btn(p):
+        if message.text == f"🛠 {p['name']} {'✅' if p['is_active'] else '⛔️'}":
             await state.update_data(admin_plan_id=p["id"])
             await message.answer(f"📦 <b>{p['name']}</b>\n📄 {p['description'] or '—'}\n"
                                  f"⏳ {p['days']} روز | 📊 {int(p['traffic_gb'])} گیگ | 💰 {int(p['price']):,} تومان\n"
@@ -737,7 +929,7 @@ async def add_plan_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     await state.set_state(AdminStates.plan_name)
-    await message.answer("📝 اسم پلن رو بفرست (مثلاً: پلن ۱ ماهه):", reply_markup=rkb([[(BACK_ADMIN, "danger")]]))
+    await message.answer("📝 اسم پلن رو بفرست:", reply_markup=rkb([[(BACK_ADMIN, "danger")]]))
 
 @router.message(AdminStates.plan_name)
 async def add_plan_name(message: Message, state: FSMContext):
@@ -798,8 +990,10 @@ async def admin_orders(message: Message, state: FSMContext):
         await message.answer("سفارش در انتظاری نیست ✅", reply_markup=ADMIN_KB)
         return
     for o in orders[:10]:
-        await message.answer(f"🆕 <b>سفارش #{o['id']}</b>\n👤 {o['full_name'] or '—'} (id: <code>{o['user_id']}</code>)\n"
-                             f"📦 {o['plan_name'] or '—'}\n💰 {int(o['price']):,} تومان\n💳 روش: {o['payment_method']}\n"
+        typ = "🔄 تمدید" if o["type"] == "renew" else "🛒 خرید"
+        item = f"{o['location'] or o['plan_name'] or '—'} | {o['days'] or '—'} روزه"
+        await message.answer(f"{typ} <b>#{o['id']}</b>\n👤 {o['full_name'] or '—'} (id: <code>{o['user_id']}</code>)\n"
+                             f"📦 {item}\n💰 {int(o['price']):,} تومان\n💳 روش: {o['payment_method']}\n"
                              f"🧾 رسید: {o['receipt']}\n🗓 {o['created_at']}")
     await message.answer("برای تایید یا رد، دکمه رو بزن و شماره سفارش رو بفرست 👇",
                          reply_markup=rkb([
@@ -838,15 +1032,29 @@ async def order_action(message: Message, state: FSMContext):
         await message.answer("❌ این سفارش وجود نداره یا قبلاً پردازش شده!")
         return
     if data.get("order_action") == "approve":
-        plan = await get_plan(order["plan_id"])
-        svc_id = await finalize_order(order["user_id"], oid, plan, order["price"], order["payment_method"])
-        svc = await get_service(svc_id)
-        try:
-            await message.bot.send_message(order["user_id"], f"✅ سفارش <b>#{oid}</b> تایید شد!\n🎉 سرویس «{plan['name']}» فعاله\n📅 انقضا: {svc['expire_date']}\n🔑 کانفیگت 👇")
-            await message.bot.send_message(order["user_id"], f"<code>{svc['config']}</code>")
-        except Exception:
-            pass
-        await message.answer(f"✅ سفارش #{oid} تایید و سرویس صادر شد.", reply_markup=ADMIN_KB)
+        if order["type"] == "renew":
+            new_exp = await extend_service(order["renew_service_id"], order["days"] or 30)
+            await approve_order(oid)
+            try:
+                await message.bot.send_message(order["user_id"], f"✅ تمدید سفارش <b>#{oid}</b> تایید شد!\n📅 انقضای جدید: <b>{new_exp}</b> 🎉")
+            except Exception:
+                pass
+            await message.answer(f"✅ تمدید #{oid} تایید شد. انقضای جدید: {new_exp}", reply_markup=ADMIN_KB)
+        else:
+            if order["days"]:
+                plan = {"id": 0, "name": f"{order['location'] or 'VPN'} | {order['days']} روزه",
+                        "days": order["days"], "traffic_gb": 0, "price": order["price"]}
+            else:
+                plan = await get_plan(order["plan_id"])
+            svc_id = await finalize_order(order["user_id"], oid, plan, order["price"], order["payment_method"],
+                                          days=order["days"], location=order["location"])
+            svc = await get_service(svc_id)
+            try:
+                await message.bot.send_message(order["user_id"], f"✅ سفارش <b>#{oid}</b> تایید شد!\n🎉 سرویس «{svc['name']}» فعاله\n📅 انقضا: {svc['expire_date']}\n🔑 کانفیگت 👇")
+                await message.bot.send_message(order["user_id"], f"<code>{svc['config']}</code>")
+            except Exception:
+                pass
+            await message.answer(f"✅ سفارش #{oid} تایید و سرویس صادر شد.", reply_markup=ADMIN_KB)
     else:
         await reject_order(oid)
         try:
@@ -922,7 +1130,7 @@ async def wallet_action(message: Message, state: FSMContext):
         await message.answer(f"❌ شارژ #{txid} رد شد.", reply_markup=ADMIN_KB)
     await state.clear()
 
-# ---------- کد تخفیف ----------
+# ---------- کد تخفیف (ادمین) ----------
 @router.message(F.text == "🏷️ مدیریت کد تخفیف")
 async def admin_codes(message: Message, state: FSMContext):
     await state.clear()
@@ -1027,7 +1235,6 @@ async def users_lookup(message: Message, state: FSMContext):
                              [("🚫 بلاک/آنبلاک", "danger"), ("💰 شارژ کاربر", "success")],
                              [(BACK_ADMIN, "danger")],
                          ]))
-    await state.clear()  # target saved below
 
 @router.message(F.text == "🚫 بلاک/آنبلاک")
 async def toggle_block(message: Message, state: FSMContext):
@@ -1122,8 +1329,21 @@ async def set_support(message: Message, state: FSMContext):
     await message.answer("✅ یوزرنیم پشتیبانی ذخیره شد!", reply_markup=ADMIN_KB)
     await state.clear()
 
+# ---------- پشتیبانگیری ----------
+@router.message(F.text == "💾 پشتیبانگیری")
+async def backup_db(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    try:
+        from aiogram.types import FSInputFile
+        if os.path.exists(DB_PATH):
+            await message.answer_document(FSInputFile(DB_PATH), caption="💾 پشتیبان دیتابیس")
+        else:
+            await message.answer("❌ فایل دیتابیس هنوز ساخته نشده!")
+    except Exception:
+        await message.answer("❌ خطا در ارسال پشتیبان", reply_markup=ADMIN_KB)
+
 # ---------------- سرور کوچک برای Render (health check) ----------------
-import os
 from aiohttp import web
 
 async def health(request):
